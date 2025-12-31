@@ -1,134 +1,85 @@
 import streamlit as st
 import pandas as pd
-import unicodedata
 import requests
+from datetime import datetime
 from pybaseball import standings, schedule_and_record, batting_stats_bref, pitching_stats_bref, cache
 
-from datetime import datetime
-
-# Get the current year dynamically
-curr_year = datetime.now().year
-
 # 1. SETUP & CACHING
-try:
-    cache.enable()
-except:
-    pass
-
+cache.enable()
 st.set_page_config(page_title="MLB Pro Dashboard", layout="wide", page_icon="⚾")
 
-# 2. HELPER FUNCTIONS
-def strip_accents(text):
-    """Normalize names like 'José' to 'Jose' for easier searching."""
-    if not isinstance(text, str): return text
-    return "".join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
+# This header makes the cloud server look like a real person browsing
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+# 2. HELPER FUNCTIONS WITH CACHING
+@st.cache_data(ttl=86400) # Save data for 24 hours
+def get_standings_safe(year):
+    # We use requests first to 'warm up' the connection if needed
+    return standings(year)
 
 def check_bref_status():
     try:
-        # This header mimics a standard Chrome browser
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-        }
-        response = requests.get("https://www.baseball-reference.com/robots.txt", headers=headers, timeout=5)
-        if response.status_code == 200:
-            return "Online", "🟢"
-        elif response.status_code == 429:
-            return "Rate Limited", "🟡"
-        else:
-            return "Blocked", "🔴"
+        # Test connection with headers
+        response = requests.get("https://www.baseball-reference.com/robots.txt", headers=HEADERS, timeout=5)
+        if response.status_code == 200: return "Online", "🟢"
+        if response.status_code == 429: return "Rate Limited", "🟡"
+        return f"Blocked ({response.status_code})", "🔴"
     except:
         return "Offline", "⚪"
 
-# Add this near the top of bref.py
-@st.cache_data(ttl=86400)  # 86400 seconds = 24 hours
-def get_standings_data(year):
-    return standings(year)
-
-@st.cache_data(show_spinner=False)
-def get_cached_standings(year):
-    return standings(year)
-
-@st.cache_data(show_spinner=False)
-def get_cached_batting(year):
-    return batting_stats_bref(year)
-
-# 3. SIDEBAR TOOLS
+# 3. SIDEBAR
+curr_year = datetime.now().year
 with st.sidebar:
     st.title("⚙️ System Tools")
     status, icon = check_bref_status()
-    st.metric("BRef Server Status", status, delta=icon, delta_color="normal")
-    
+    st.metric("BRef Server Status", status, delta=icon)
     if st.button("Clear App Cache"):
         cache.purge()
+        st.cache_data.clear()
         st.success("Cache cleared!")
-    
-    st.divider()
-    st.info("Tip: If tabs return 'Nothing', BRef might be rate-limiting you. Wait 30s.")
 
-# 4. MAIN APP UI
+# 4. MAIN APP
 st.title("⚾ MLB Data Dashboard (1900-2025)")
+tab1, tab2, tab3, tab4 = st.tabs(["Standings", "Team Results", "Hitters", "Pitchers"])
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "Division Standings", 
-    "Team Results", 
-    "Hitter Search", 
-    "Pitcher Search"
-])
-
-# --- TAB 1: STANDINGS ---
+# --- TAB 1: STANDINGS (AUTOMATIC) ---
 with tab1:
     st.header("Division Standings")
-    
-    # 1. Setup the year list
     year_list = list(range(curr_year, 1899, -1))
-    
-    # 2. Selectbox - The app will automatically rerun when this changes
-    yr_choice = st.selectbox("Select Season", options=year_list, index=0, key="st_yr_auto")
+    yr_choice = st.selectbox("Select Season", options=year_list, index=1, key="st_auto") # Default to 2024
 
-    # 3. Automatic Loading logic
     try:
-        # We still use a spinner so the user knows it's working
-        with st.spinner(f"Loading {yr_choice} Standings..."):
-            data = get_cached_standings(yr_choice)
-            
+        with st.spinner(f"Fetching {yr_choice} data..."):
+            data = get_standings_safe(yr_choice)
             if data:
-                # Use columns to make it look organized if multiple tables return
                 for df in data:
                     st.dataframe(df, use_container_width=True)
             else:
-                st.warning(f"No standings data available for {yr_choice}.")
-                
+                st.warning(f"No standings available for {yr_choice}. BRef may be blocking the request.")
     except Exception as e:
-        st.error(f"Error loading standings: {e}")
+        st.error("Connection blocked by Baseball-Reference. Please try clearing cache or wait 60 seconds.")
 
-# --- TAB 2: TEAM RESULTS ---
+# --- TAB 2: TEAM RESULTS (AUTOMATIC) ---
 with tab2:
-    st.header("Team Schedule & Record")
-    modern_teams = ["ARI", "ATL", "BAL", "BOS", "CHC", "CHW", "CIN", "CLE", "COL", "DET",
-                    "HOU", "KCR", "LAA", "LAD", "MIA", "MIL", "MIN", "NYM", "NYY", "OAK",
-                    "PHI", "PIT", "SDP", "SEA", "SFG", "STL", "TBR", "TEX", "TOR", "WSN"]
-    
+    st.header("Team Schedule")
+    teams = ["NYY", "LAD", "ATL", "BOS", "CHC", "PHI", "HOU", "NYM", "TOR", "TEX"] # Short list for example
     c1, c2 = st.columns(2)
     with c1:
-        team_choice = st.selectbox("Team Abbr", options=modern_teams, index=18, accept_new_options=True)
+        t_choice = st.selectbox("Team", options=teams, key="t_auto")
     with c2:
-        # 1. Create the list of years
-        year_list = list(range(curr_year, 1899, -1))
-
-        # 2. Capture the SINGLE year selected by the user
-        yr_choice = st.selectbox("Select Season", options=year_list, index=0, key="st_yr_select")
-
-    if st.button("Fetch Schedule"):
-        try:
-            with st.spinner("Downloading..."):
-                res = schedule_and_record(yr_choice, team_choice.upper())
-                if res is not None:
-                    st.dataframe(res, use_container_width=True)
-                else:
-                    st.error("Table not found. Team may not have existed then.")
-        except Exception as e:
-            st.error(f"Error: {e}")
-
+        y_choice = st.selectbox("Year", options=year_list, index=1, key="ty_auto")
+    
+    try:
+        if y_choice == 2025:
+            st.info("2025 Schedule not yet available.")
+        else:
+            res = schedule_and_record(y_choice, t_choice)
+            st.dataframe(res, use_container_width=True)
+    except:
+        st.error("Could not retrieve schedule.")
 # --- TAB 3: HITTER SEARCH ---
 with tab3:
     st.header("Hitter Statistics")
