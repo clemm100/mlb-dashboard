@@ -1,0 +1,7 @@
+streamlit
+pybaseball
+pandas
+requests
+lxml
+beautifulsoup4
+html5lib
