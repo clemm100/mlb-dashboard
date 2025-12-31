@@ -24,14 +24,25 @@ def strip_accents(text):
     return "".join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
 
 def check_bref_status():
-    """Checks if Baseball-Reference is reachable or blocking the script."""
     try:
-        response = requests.get("https://www.baseball-reference.com/robots.txt", timeout=5)
-        if response.status_code == 200: return "Online", "🟢"
-        if response.status_code == 429: return "Rate Limited", "🟡"
-        return "Blocked", "🔴"
+        # This header mimics a standard Chrome browser
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        }
+        response = requests.get("https://www.baseball-reference.com/robots.txt", headers=headers, timeout=5)
+        if response.status_code == 200:
+            return "Online", "🟢"
+        elif response.status_code == 429:
+            return "Rate Limited", "🟡"
+        else:
+            return "Blocked", "🔴"
     except:
         return "Offline", "⚪"
+
+# Add this near the top of bref.py
+@st.cache_data(ttl=86400)  # 86400 seconds = 24 hours
+def get_standings_data(year):
+    return standings(year)
 
 @st.cache_data(show_spinner=False)
 def get_cached_standings(year):
